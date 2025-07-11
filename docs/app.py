@@ -19,11 +19,11 @@ st.set_page_config(
 )
 
 # Título principal
-st.title("🌌 Predictor de Trayectorias de Asteroides")
+st.title("Predictor de Trayectorias de Asteroides")
 st.markdown("**Análisis y predicción de órbitas de asteroides usando Machine Learning**")
 
 # Sidebar para configuración
-st.sidebar.header("⚙️ Configuración")
+st.sidebar.header("Configuración")
 LOOKBACK = st.sidebar.slider("Pasos históricos (LOOKBACK)", 5, 20, 10)
 PREDICTION = st.sidebar.slider("Pasos a predecir (PREDICTION)", 1, 10, 5)
 algorithm = st.sidebar.selectbox("Algoritmo", ["MLP Neural Network", "Random Forest"])
@@ -212,7 +212,7 @@ def create_velocity_plot(y_true, y_pred, asteroid_name, step):
     return fig
 
 # Interfaz principal
-st.header("📁 Carga de Datos")
+st.header("Carga de Datos")
 
 uploaded_files = st.file_uploader(
     "Sube archivos de asteroides (.txt)",
@@ -232,12 +232,12 @@ if uploaded_files:
             if not df.empty:
                 asteroid_name = uploaded_file.name.replace('.txt', '')
                 asteroid_data[asteroid_name] = df
-                st.success(f"✅ {asteroid_name}: {len(df)} puntos de datos cargados")
+                st.success(f"{asteroid_name}: {len(df)} puntos de datos cargados")
             else:
-                st.error(f"❌ Error procesando {uploaded_file.name}")
+                st.error(f"Error procesando {uploaded_file.name}")
     
     if asteroid_data:
-        st.header("🎯 Entrenamiento del Modelo")
+        st.header("Entrenamiento del Modelo")
         
         # Preparar datos para entrenamiento
         X_train_list = []
@@ -266,14 +266,14 @@ if uploaded_files:
             st.write(f"**Forma de salida**: {y_train.shape}")
             
             # Entrenar modelo
-            if st.button("🚀 Entrenar Modelo"):
+            if st.button("Entrenar Modelo"):
                 with st.spinner(f"Entrenando modelo {algorithm}..."):
                     model = create_model(algorithm, LOOKBACK, PREDICTION)
                     
                     # Entrenar
                     model.fit(X_train, y_train)
                     
-                    st.success(f"🎉 Modelo {algorithm} entrenado exitosamente!")
+                    st.success(f"Modelo {algorithm} entrenado exitosamente!")
                     
                     # Calcular score en entrenamiento
                     train_score = model.score(X_train, y_train)
@@ -287,7 +287,7 @@ if uploaded_files:
         
         # Evaluación y visualización
         if 'model' in st.session_state:
-            st.header("📊 Evaluación y Visualización")
+            st.header("Evaluación y Visualización")
             
             selected_asteroid = st.selectbox(
                 "Selecciona un asteroide para evaluar:",
@@ -312,7 +312,7 @@ if uploaded_files:
                     y_pred = inverse_transform_prediction(y_pred_flat, scalers, PREDICTION)
                     
                     # Métricas
-                    st.subheader("📈 Métricas de Error")
+                    st.subheader("Métricas de Error")
                     
                     col1, col2 = st.columns(2)
                     
@@ -343,7 +343,7 @@ if uploaded_files:
                         st.plotly_chart(fig_error, use_container_width=True)
                     
                     # Visualizaciones
-                    st.subheader("🌌 Visualizaciones")
+                    st.subheader("Visualizaciones")
                     
                     step_to_plot = st.selectbox(
                         "Selecciona el paso a visualizar:",
@@ -360,7 +360,7 @@ if uploaded_files:
                     st.plotly_chart(fig_vel, use_container_width=True)
                     
                     # Información del dataset
-                    st.subheader("ℹ️ Información del Dataset")
+                    st.subheader("Información del Dataset")
                     col1, col2, col3, col4 = st.columns(4)
                     
                     with col1:
@@ -373,14 +373,14 @@ if uploaded_files:
                         st.metric("Características", 6)
                     
                     # Estadísticas del asteroide
-                    st.subheader("📋 Estadísticas del Asteroide")
+                    st.subheader("Estadísticas del Asteroide")
                     st.dataframe(df_selected[['X', 'Y', 'Z', 'VX', 'VY', 'VZ']].describe())
                     
                 else:
                     st.error("No hay suficientes datos para crear secuencias de prueba")
     
     # Información y ayuda
-    with st.expander("❓ Ayuda"):
+    with st.expander("Ayuda"):
         st.markdown("""
         ### Cómo usar esta aplicación:
         
@@ -401,10 +401,10 @@ if uploaded_files:
         """)
 
 else:
-    st.info("👆 Sube archivos de asteroides para comenzar el análisis")
+    st.info("Sube archivos de asteroides para comenzar el análisis")
     
     # Datos de ejemplo
-    st.subheader("📊 Ejemplo de datos esperados")
+    st.subheader("Ejemplo de datos esperados")
     
     # Crear datos de ejemplo
     example_data = {
