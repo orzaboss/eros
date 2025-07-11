@@ -6,12 +6,10 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import re
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Flatten
-from tensorflow.keras.optimizers import Adam
+from sklearn.neural_network import MLPRegressor
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import io
-import pickle
 
 # Configuración de la página
 st.set_page_config(
@@ -27,7 +25,8 @@ st.markdown("**Análisis y predicción de órbitas de asteroides usando Machine 
 # Sidebar para configuración
 st.sidebar.header("⚙️ Configuración")
 LOOKBACK = st.sidebar.slider("Pasos históricos (LOOKBACK)", 5, 20, 10)
-PREDICTION = st.sidebar.slider("Pasos a predecir (PREDICTION)", 5, 20, 10)
+PREDICTION = st.sidebar.slider("Pasos a predecir (PREDICTION)", 1, 10, 5)
+algorithm = st.sidebar.selectbox("Algoritmo", ["MLP Neural Network", "Random Forest"])
 
 # Funciones auxiliares
 @st.cache_data
@@ -42,16 +41,12 @@ def extract_datetime(text):
 def load_and_clean_from_upload(file_content):
     """Procesa archivo subido"""
     try:
-        # Leer desde el contenido del archivo
         lines = file_content.decode('utf-8').split('\n')
-        
-        # Saltar las primeras 79 líneas (header)
         data_lines = lines[79:]
         
-        # Procesar líneas
         processed_data = []
         for line in data_lines:
-            if line.strip():  # Solo líneas no vacías
+            if line.strip():
                 parts = line.split(',')
                 if len(parts) >= 10:
                     processed_data.append(parts)
@@ -59,23 +54,17 @@ def load_and_clean_from_upload(file_content):
         if not processed_data:
             return pd.DataFrame()
         
-        # Crear DataFrame
         df_raw = pd.DataFrame(processed_data)
-        
-        # Extraer datetime
         df_raw['datetime_str'] = df_raw[1].apply(extract_datetime)
         df_raw['datetime'] = pd.to_datetime(df_raw['datetime_str'], errors='coerce')
         
-        # Columnas numéricas
         df_numeric = df_raw.iloc[:, 4:10].copy()
         df_numeric.columns = ['X', 'Y', 'Z', 'VX', 'VY', 'VZ']
         df_numeric['datetime'] = df_raw['datetime']
         
-        # Convertir a numérico
         for col in ['X', 'Y', 'Z', 'VX', 'VY', 'VZ']:
             df_numeric[col] = pd.to_numeric(df_numeric[col], errors='coerce')
         
-        # Limpiar datos
         df_numeric = df_numeric.dropna().reset_index(drop=True)
         return df_numeric
         
@@ -97,75 +86,80 @@ def scale_features(df):
     df_scaled['datetime'] = df['datetime']
     return df_scaled, scalers
 
-@st.cache_data
-def create_sequences(df, lookback, prediction):
-    """Crea secuencias para entrenamiento"""
+def create_sequences_for_sklearn(df, lookback, prediction):
+    """Crea secuencias para sklearn (2D)"""
     data = df[['X','Y','Z','VX','VY','VZ']].values
     X, y = [], []
     
     for i in range(len(data) - lookback - prediction + 1):
-        X.append(data[i:i+lookback])
-        y.append(data[i+lookback:i+lookback+prediction])
+        X.append(data[i:i+lookback].flatten())  # Aplanar para sklearn
+        y.append(data[i+lookback:i+lookback+prediction].flatten())  # Aplanar salida
     
     return np.array(X), np.array(y)
 
-@st.cache_resource
-def create_model(lookback, prediction):
-    """Crea el modelo MLP"""
-    model = Sequential([
-        Flatten(input_shape=(lookback, 6)),
-        Dense(128, activation='relu'),
-        Dense(64, activation='relu'),
-        Dense(prediction * 6)
-    ])
-    
-    model.compile(optimizer=Adam(), loss='mse')
-    return model
+def create_model(algorithm, lookback, prediction, n_features=6):
+    """Crea modelo usando sklearn"""
+    if algorithm == "MLP Neural Network":
+        return MLPRegressor(
+            hidden_layer_sizes=(128, 64),
+            max_iter=200,
+            random_state=42
+        )
+    else:  # Random Forest
+        return RandomForestRegressor(
+            n_estimators=100,
+            random_state=42,
+            n_jobs=-1
+        )
 
-def inverse_transform_data(data_scaled, scalers):
-    """Desescala los datos"""
-    data_inv = np.empty_like(data_scaled)
+def inverse_transform_prediction(pred_flat, scalers, prediction, n_features=6):
+    """Desescala predicciones planas"""
+    pred_reshaped = pred_flat.reshape(-1, prediction, n_features)
+    pred_descaled = np.empty_like(pred_reshaped)
+    
     features = ['X', 'Y', 'Z', 'VX', 'VY', 'VZ']
-    
     for i, feat in enumerate(features):
-        data_inv[:, :, i] = scalers[feat].inverse_transform(
-            data_scaled[:, :, i].reshape(-1, 1)
-        ).reshape(-1, data_scaled.shape[1])
+        for step in range(prediction):
+            pred_descaled[:, step, i] = scalers[feat].inverse_transform(
+                pred_reshaped[:, step, i].reshape(-1, 1)
+            ).flatten()
     
-    return data_inv
+    return pred_descaled
 
 def create_3d_trajectory_plot(y_true, y_pred, asteroid_name, step):
     """Crea gráfico 3D de trayectorias"""
     fig = go.Figure()
     
-    # Trayectoria real
+    # Limitar número de puntos para mejor visualización
+    max_points = min(100, len(y_true))
+    idx = np.linspace(0, len(y_true)-1, max_points, dtype=int)
+    
     fig.add_trace(go.Scatter3d(
-        x=y_true[:, step, 0],
-        y=y_true[:, step, 1],
-        z=y_true[:, step, 2],
+        x=y_true[idx, step, 0],
+        y=y_true[idx, step, 1],
+        z=y_true[idx, step, 2],
         mode='markers+lines',
         name='Trayectoria Real',
         marker=dict(size=3, color='blue'),
-        line=dict(width=2)
+        line=dict(width=3)
     ))
     
-    # Trayectoria predicha
     fig.add_trace(go.Scatter3d(
-        x=y_pred[:, step, 0],
-        y=y_pred[:, step, 1],
-        z=y_pred[:, step, 2],
+        x=y_pred[idx, step, 0],
+        y=y_pred[idx, step, 1],
+        z=y_pred[idx, step, 2],
         mode='markers+lines',
         name='Trayectoria Predicha',
         marker=dict(size=3, color='red'),
-        line=dict(width=2)
+        line=dict(width=3)
     ))
     
     fig.update_layout(
         title=f'{asteroid_name} - Posiciones 3D (Paso +{step+1})',
         scene=dict(
-            xaxis_title='X',
-            yaxis_title='Y',
-            zaxis_title='Z'
+            xaxis_title='X (AU)',
+            yaxis_title='Y (AU)',
+            zaxis_title='Z (AU)'
         ),
         height=600
     )
@@ -183,25 +177,29 @@ def create_velocity_plot(y_true, y_pred, asteroid_name, step):
     velocity_features = ['VX', 'VY', 'VZ']
     colors = ['red', 'green', 'blue']
     
+    # Limitar puntos para mejor visualización
+    max_points = min(50, len(y_true))
+    idx = np.linspace(0, len(y_true)-1, max_points, dtype=int)
+    
     for i, (feat, color) in enumerate(zip(velocity_features, colors)):
-        # Velocidad real
         fig.add_trace(
             go.Scatter(
-                y=y_true[:, step, i+3],
+                x=list(range(len(idx))),
+                y=y_true[idx, step, i+3],
                 name=f'Real {feat}',
                 line=dict(color=color, width=2),
-                mode='lines'
+                mode='lines+markers'
             ),
             row=i+1, col=1
         )
         
-        # Velocidad predicha
         fig.add_trace(
             go.Scatter(
-                y=y_pred[:, step, i+3],
+                x=list(range(len(idx))),
+                y=y_pred[idx, step, i+3],
                 name=f'Pred {feat}',
                 line=dict(color=color, width=2, dash='dash'),
-                mode='lines'
+                mode='lines+markers'
             ),
             row=i+1, col=1
         )
@@ -216,7 +214,6 @@ def create_velocity_plot(y_true, y_pred, asteroid_name, step):
 # Interfaz principal
 st.header("📁 Carga de Datos")
 
-# Carga de archivos
 uploaded_files = st.file_uploader(
     "Sube archivos de asteroides (.txt)",
     type=['txt'],
@@ -225,7 +222,6 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    # Procesar archivos
     asteroid_data = {}
     
     with st.spinner("Procesando archivos..."):
@@ -253,7 +249,7 @@ if uploaded_files:
                 df_scaled, scalers = scale_features(df)
                 scalers_global[name] = scalers
                 
-                X_seq, y_seq = create_sequences(df_scaled, LOOKBACK, PREDICTION)
+                X_seq, y_seq = create_sequences_for_sklearn(df_scaled, LOOKBACK, PREDICTION)
                 
                 if X_seq.shape[0] > 0:
                     X_train_list.append(X_seq)
@@ -262,41 +258,37 @@ if uploaded_files:
                 st.write(f"**{name}**: {X_seq.shape[0]} secuencias creadas")
         
         if X_train_list:
-            # Combinar datos
             X_train = np.concatenate(X_train_list, axis=0)
             y_train = np.concatenate(y_train_list, axis=0)
-            y_train_flat = y_train.reshape((y_train.shape[0], PREDICTION * 6))
             
             st.write(f"**Dataset total**: {X_train.shape[0]} secuencias")
+            st.write(f"**Forma de entrada**: {X_train.shape}")
+            st.write(f"**Forma de salida**: {y_train.shape}")
             
             # Entrenar modelo
             if st.button("🚀 Entrenar Modelo"):
-                with st.spinner("Entrenando modelo..."):
-                    model = create_model(LOOKBACK, PREDICTION)
+                with st.spinner(f"Entrenando modelo {algorithm}..."):
+                    model = create_model(algorithm, LOOKBACK, PREDICTION)
                     
-                    # Crear contenedor para progreso
-                    progress_bar = st.progress(0)
-                    epochs = 20
+                    # Entrenar
+                    model.fit(X_train, y_train)
                     
-                    # Entrenar por lotes para mostrar progreso
-                    for epoch in range(epochs):
-                        model.fit(X_train, y_train_flat, 
-                                epochs=1, batch_size=32, 
-                                validation_split=0.2, verbose=0)
-                        progress_bar.progress((epoch + 1) / epochs)
+                    st.success(f"🎉 Modelo {algorithm} entrenado exitosamente!")
                     
-                    st.success("🎉 Modelo entrenado exitosamente!")
+                    # Calcular score en entrenamiento
+                    train_score = model.score(X_train, y_train)
+                    st.write(f"**Score R² en entrenamiento**: {train_score:.4f}")
                     
                     # Guardar modelo en session state
                     st.session_state['model'] = model
                     st.session_state['scalers'] = scalers_global
                     st.session_state['asteroid_data'] = asteroid_data
+                    st.session_state['algorithm'] = algorithm
         
         # Evaluación y visualización
         if 'model' in st.session_state:
             st.header("📊 Evaluación y Visualización")
             
-            # Seleccionar asteroide para evaluar
             selected_asteroid = st.selectbox(
                 "Selecciona un asteroide para evaluar:",
                 list(asteroid_data.keys())
@@ -305,17 +297,19 @@ if uploaded_files:
             if selected_asteroid:
                 df_selected = asteroid_data[selected_asteroid]
                 df_scaled, scalers = scale_features(df_selected)
-                X_test, y_test = create_sequences(df_scaled, LOOKBACK, PREDICTION)
+                X_test, y_test = create_sequences_for_sklearn(df_scaled, LOOKBACK, PREDICTION)
                 
                 if X_test.shape[0] > 0:
-                    # Hacer predicciones
                     model = st.session_state['model']
                     y_pred_flat = model.predict(X_test)
-                    y_pred_scaled = y_pred_flat.reshape(y_test.shape)
+                    
+                    # Reshape para visualización
+                    y_test_reshaped = y_test.reshape(-1, PREDICTION, 6)
+                    y_pred_reshaped = y_pred_flat.reshape(-1, PREDICTION, 6)
                     
                     # Desescalar
-                    y_true = inverse_transform_data(y_test, scalers)
-                    y_pred = inverse_transform_data(y_pred_scaled, scalers)
+                    y_true = inverse_transform_prediction(y_test, scalers, PREDICTION)
+                    y_pred = inverse_transform_prediction(y_pred_flat, scalers, PREDICTION)
                     
                     # Métricas
                     st.subheader("📈 Métricas de Error")
@@ -324,7 +318,7 @@ if uploaded_files:
                     
                     with col1:
                         st.write("**Error por paso de predicción:**")
-                        for step in range(min(5, PREDICTION)):  # Mostrar solo primeros 5 pasos
+                        for step in range(PREDICTION):
                             rmse = np.sqrt(mean_squared_error(y_true[:, step, :], y_pred[:, step, :]))
                             mae = mean_absolute_error(y_true[:, step, :], y_pred[:, step, :])
                             st.write(f"Paso +{step+1}: RMSE = {rmse:.4f}, MAE = {mae:.4f}")
@@ -351,7 +345,6 @@ if uploaded_files:
                     # Visualizaciones
                     st.subheader("🌌 Visualizaciones")
                     
-                    # Selector de paso
                     step_to_plot = st.selectbox(
                         "Selecciona el paso a visualizar:",
                         list(range(1, PREDICTION + 1)),
@@ -368,13 +361,15 @@ if uploaded_files:
                     
                     # Información del dataset
                     st.subheader("ℹ️ Información del Dataset")
-                    col1, col2, col3 = st.columns(3)
+                    col1, col2, col3, col4 = st.columns(4)
                     
                     with col1:
                         st.metric("Puntos de datos", len(df_selected))
                     with col2:
                         st.metric("Secuencias creadas", X_test.shape[0])
                     with col3:
+                        st.metric("Algoritmo", st.session_state['algorithm'])
+                    with col4:
                         st.metric("Características", 6)
                     
                     # Estadísticas del asteroide
@@ -391,27 +386,34 @@ if uploaded_files:
         
         1. **Carga archivos**: Sube archivos .txt con datos orbitales de asteroides
         2. **Configura parámetros**: Ajusta LOOKBACK y PREDICTION en el sidebar
-        3. **Entrena modelo**: Haz clic en "Entrenar Modelo" para crear el modelo predictivo
-        4. **Evalúa resultados**: Selecciona un asteroide y visualiza las predicciones
+        3. **Selecciona algoritmo**: Elige entre MLP Neural Network o Random Forest
+        4. **Entrena modelo**: Haz clic en "Entrenar Modelo" para crear el modelo predictivo
+        5. **Evalúa resultados**: Selecciona un asteroide y visualiza las predicciones
         
         ### Formato de archivos:
         - Los archivos deben tener al menos 79 líneas de header
         - Las columnas deben incluir: X, Y, Z, VX, VY, VZ
         - Los datos deben estar separados por comas
         
-        ### Parámetros:
-        - **LOOKBACK**: Número de pasos históricos para hacer predicciones
-        - **PREDICTION**: Número de pasos futuros a predecir
+        ### Algoritmos disponibles:
+        - **MLP Neural Network**: Red neuronal multicapa (sklearn)
+        - **Random Forest**: Ensemble de árboles de decisión
         """)
 
 else:
     st.info("👆 Sube archivos de asteroides para comenzar el análisis")
     
-    # Ejemplo de formato de archivo
-    st.subheader("📄 Formato de archivo esperado")
-    st.code("""
-    # Primeras 79 líneas son header (se ignoran)
-    # Después vienen los datos con formato:
-    JDTDB, Calendar Date, X, Y, Z, VX, VY, VZ, ...
-    2451545.0, 2000-Jan-01 12:00:00.000, 1.234, 2.345, 3.456, 0.123, 0.234, 0.345, ...
-    """)
+    # Datos de ejemplo
+    st.subheader("📊 Ejemplo de datos esperados")
+    
+    # Crear datos de ejemplo
+    example_data = {
+        'X': [1.234, 1.235, 1.236],
+        'Y': [2.345, 2.346, 2.347],
+        'Z': [3.456, 3.457, 3.458],
+        'VX': [0.123, 0.124, 0.125],
+        'VY': [0.234, 0.235, 0.236],
+        'VZ': [0.345, 0.346, 0.347]
+    }
+    
+    st.dataframe(pd.DataFrame(example_data))
